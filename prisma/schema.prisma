@@ -1,0 +1,111 @@
+datasource db {
+  provider  = "postgresql" // Supabase Postgres
+  url       = env("DATABASE_URL") // pooled connection (port 6543, ?pgbouncer=true) — used at runtime
+  directUrl = env("DIRECT_URL") // direct connection (port 5432) — used by `prisma db push` / migrations
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum ElectionStatus {
+  DRAFT // admin is still building it (positions/candidates), not visible to students
+  LIVE // voting open
+  ENDED // voting closed, results viewable
+}
+
+model Student {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  firstName    String
+  surname      String
+  matricNumber String   @unique
+  department   String // derived from matric number: CMP / CYB / IFT
+  verified     Boolean  @default(false)
+  otpCode      String?
+  otpExpiresAt DateTime?
+  createdAt    DateTime @default(now())
+
+  votes    Vote[]
+  accesses ElectionAccess[]
+}
+
+model Admin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  elections Election[]
+}
+
+model Election {
+  id              String         @id @default(cuid())
+  title           String
+  status          ElectionStatus @default(DRAFT)
+  passwordHash    String // password students enter to unlock the ballot
+  durationMinutes Int // set at creation, max enforced in app layer (120)
+  startTime       DateTime?
+  endTime         DateTime?
+  createdById     String
+  createdBy       Admin          @relation(fields: [createdById], references: [id])
+  createdAt       DateTime       @default(now())
+
+  positions Position[]
+  votes     Vote[]
+  accesses  ElectionAccess[]
+}
+
+model Position {
+  id         String   @id @default(cuid())
+  electionId String
+  election   Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  title      String
+  order      Int      @default(0)
+
+  candidates Candidate[]
+  votes      Vote[]
+}
+
+model Candidate {
+  id         String   @id @default(cuid())
+  positionId String
+  position   Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  name       String
+  photoUrl   String
+  bio        String?
+  order      Int      @default(0)
+
+  votes Vote[]
+}
+
+// Records that a student unlocked a given election with the admin-set password.
+model ElectionAccess {
+  id         String   @id @default(cuid())
+  electionId String
+  election   Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id])
+  grantedAt  DateTime @default(now())
+
+  @@unique([electionId, studentId])
+}
+
+// One row per (student, position). The unique constraint below is what makes
+// "one vote per position, no edits after submission" actually true at the DB
+// level -- there is deliberately no update/delete route for votes anywhere in
+// the app, only inserts guarded by this constraint.
+model Vote {
+  id          String    @id @default(cuid())
+  electionId  String
+  election    Election  @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  positionId  String
+  position    Position  @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id])
+  studentId   String
+  student     Student   @relation(fields: [studentId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@unique([electionId, positionId, studentId])
+}
